@@ -18,7 +18,6 @@
 
 var BigNumber = require("bignumber.js")
 var ethabi = require("ethereumjs-abi")
-var t0 = new Date
 
 process.on("unhandledException", () => process.exit(1))
 
@@ -41,6 +40,7 @@ if (!skipBuild) {
   })
 }
 
+var t0 = new Date
 console.log(`Running ${getTestClasses().map(x => x.name)}...`)
 console.log()
 
