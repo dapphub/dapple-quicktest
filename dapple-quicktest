@@ -1,0 +1,297 @@
+#!/usr/bin/env node
+/// dapple-quicktest -- blazingly fast Ethereum test runner
+
+// Copyright 2016  Nexus Development, LLC
+
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License as
+// published by the Free Software Foundation, either version 3 of
+// the License, or (at your option) any later version.
+
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty
+// of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// See the GNU General Public License for more details.
+
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see http://www.gnu.org/licenses.
+
+var BigNumber = require("bignumber.js")
+var ethabi = require("ethereumjs-abi")
+var t0 = new Date
+
+process.on("unhandledException", () => process.exit(1))
+
+var args = process.argv.slice(2)
+
+var skipBuild = false
+var verbose = 0
+
+for (var i = 0; i < args.length; i++) {
+  if (args[i] == "--skip-build") {
+    skipBuild = true
+  } else if (/^(-v|--(verbose|report))$/.test(args[i])) {
+    verbose++
+  }
+}
+
+if (!skipBuild) {
+  require("child_process").execSync("dapple build --test", {
+    stdio: [null, "inherit", "inherit"]
+  })
+}
+
+console.log(`Running ${getTestClasses().map(x => x.name)}...`)
+console.log()
+
+var globalSourceCode = getGlobalSourceCode()
+var localSourceCode = getLocalSourceCode()
+var allSourceCode = [globalSourceCode, localSourceCode].join("\n")
+
+var events = getEvents()
+var tests = getTests()
+
+function formatEventDeclaration({ name, inputs, indexed }) {
+  return `event ${name}(${inputs.map(({ type, indexed, name }) => {
+    return `${type}${indexed ? " indexed" : ""} ${name}`
+  }).join(", ")});`
+}
+
+function scan(string, pattern) {
+  var result = []
+  string.replace(pattern, (...match) => result.push(match))
+  return result
+}
+
+function getEvents() {
+  return scan(
+    allSourceCode, /\bevent\s+(\w+)\s*\(([\w\s,]*)\)\s*(anonymous\b)?/g
+  ).map(([_, name, list, anonymous]) => ({
+    type: "event", anonymous, name,
+    inputs: list.split(/,/).map(
+      x => x.trim().replace(/\s+/g, " ")
+    ).map((item, i) => {
+      var [type, ...words] = item.split(" ")
+      var indexed = words.some(x => x == "indexed")
+      var name = words.filter(x => x != "indexed")[0] || `param${i + 1}`
+      return { type, indexed, name }
+    })
+  }))
+}
+
+tests.forEach(runTest)
+
+function runTest(test) {
+  var methodNames = ["setUp", test.name, "failed"]
+  var methodIDs = methodNames.map(name => methodID({ name }))
+  var stdio = ["pipe", "pipe", "inherit"]
+  var child = require("child_process").spawn("ethrun", methodIDs, { stdio })
+  var output = []
+  child.stdout.on("data", x => output.push(x))
+  child.stdout.on("end", () => handleTestOutput(test, Buffer.concat(output)))
+  child.stdin.end(test.class.bytecode)
+}
+
+function handleTestOutput(test, output) {
+  test.finished = true
+  test.results = JSON.parse(String(output))
+  test.failed = !!Number(test.results[3].output)
+  test.passed = test.results.every(x => x.success) && !test.failed
+
+  if (/^test(Fail|Error)/.test(test.name)) {
+    test.passed = !test.passed
+  }
+
+  if (tests.every(test => test.finished && (printProgress(test), true))) {
+    console.log(), printDetails(), printSummary()
+  }
+}
+
+function printProgress(test) {
+  if (!test.printed) {
+    test.printed = true
+    process.stdout.write(test.passed ? "." : "\x1b[31;1mF\x1b[0m")
+  }
+}
+
+function printDetails() {
+  failures = tests.filter(test => !test.passed)
+  failures.forEach(printFailure)
+}
+
+function printFailure(failedTest) {
+  console.log()
+
+  var name = failures.every(x => x.class.name == failedTest.class.name)
+    ? failedTest.name : `${failedTest.class.name}.${failedTest.name}`
+
+  console.log([
+    `\x1b[31;1m${failedTest.failed ? "FAIL" : "CRASH"}\x1b[0m \x1b[4m${name}\x1b[0m`,
+    ([].concat(...failedTest.results.slice(0, 3).map(result => {
+      return result.logs.map(formatLog).filter(x => x)
+    })).join("\n") || "(no details)").replace(/^/gm, "  "),
+  ].join("\n").replace(/^/gm, "  "))
+}
+
+function formatLog(log) {
+  var event = getEvent(log.topics[0])
+  if (event) {
+    var params = [
+      ...event.inputs.filter(x =>  x.indexed),
+      ...event.inputs.filter(x => !x.indexed),
+    ]
+
+    var args = ethabi.rawDecode(
+      params.map(x => x.type),
+      new Buffer(log.topics.slice(1).join("") + log.data, "hex")
+    )
+
+    if (event.name == "log_bytes32") {
+      return toString(args[0]).replace(
+        /^Error: /, "\x1b[31;1mError:\x1b[0m "
+      )
+    } else if (/^log_named_decimal_u?int$/.test(event.name)) {
+      var number = new BigNumber(String(args[1]))
+      var decimals = Number(args[2])
+      var scale = new BigNumber(`1e${decimals}`)
+      var formattedNumber = number.div(scale).toFormat(decimals)
+      return `${args[0]}: ${pad(formattedNumber, decimals + 6)}`
+    } else if (verbose) {
+      return `\x1b[36m← ${event.name}(${args.map((arg, i) => {
+        return ({
+          address : formatBinary,
+          bytes32 : formatBytes,
+          string  : formatString,
+        }[params[i].type] || (x => x))(arg)
+      }).join(", ")})\x1b[0m`
+    }
+  } else if (verbose) {
+    return `\x1b[36m← ${
+      JSON.stringify(log.topics)
+    } ${JSON.stringify(log.data)}\x1b[0m`
+  }
+}
+
+function formatBytes(x) {
+  return isPrintable(x) ? formatString(x) : formatBinary(x)
+}
+
+function formatBinary(x) {
+  return `0x${x.toString("hex")}`
+}
+
+function isPrintable(x) {
+  return !/\0/.test(toString(x))
+}
+
+function pad(x, n) {
+  return new Array(Math.max(0, n - x.length) + 1).join(" ") + x
+}
+
+function toString(x) {
+  return String(x).replace(/\0+$/, "")
+}
+
+function formatString(x) {
+  return JSON.stringify(toString(x))
+}
+
+function getEvent(topic) {
+  return events.filter(event => eventID(event) == topic)[0]
+}
+
+function printSummary() {
+  var failures = tests.filter(x => !x.passed)
+  var seconds = ((new Date - t0) / 1000).toFixed(3)
+  console.log()
+  console.log(`Ran ${tests.length} tests in ${seconds} seconds`)
+  console.log()
+
+  if (failures.length) {
+    console.log(`\x1b[31;1mFAILED\x1b[0m (failures=${failures.length})`)
+  } else {
+    console.log(`\x1b[32;1mOK\x1b[0m`)
+  }
+}
+
+function getTests() {
+  return getTestMethods().map((testMethod, index) => {
+    return Object.assign({ index }, testMethod)
+  })
+}
+
+function getTestClasses() {
+  return getClasses().filter(isTestClass)
+}
+
+function getTestMethods() {
+  return sortMembers([].concat(
+    ...getTestClasses().map(testClass => {
+      return testClass.members.filter(isTestMethod).map(testMethod => {
+        return Object.assign({ class: testClass }, testMethod)
+      })
+    })
+  ))
+}
+
+function isTestClass({ name, members }) {
+  return name != "Test" && members.some(x => x.name == "IS_TEST")
+}
+
+function isTestMethod({ name, inputs }) {
+  return /^test/.test(name) && inputs.length == 0
+}
+
+function sortMembers(members) {
+  return members.sort(alphabetizeMembers).sort(orderMembers)
+}
+
+function alphabetizeMembers(a, b) {
+  return a.name > b.name ? +1 : a.name < b.name ? -1 : 0
+}
+
+function orderMembers(a, b) {
+  return localSourceCode.indexOf(a.name) - localSourceCode.indexOf(b.name)
+}
+
+function methodID({ name, inputs=[] }) {
+  return ethabi.methodID(name, inputs.map(x => x.type)).toString("hex")
+}
+
+function eventID({ name, inputs }) {
+  return ethabi.eventID(name, inputs.map(x => x.type)).toString("hex")
+}
+
+function getGlobalSourceCode() {
+  return require("fs").readFileSync(
+    `${__dirname}/event-list.sol`, { encoding: "utf-8" }
+  )
+}
+
+function getLocalSourceCode() {
+  return require("child_process").execSync(`
+    dir=$({ grep sol_sources: [Dd]appfile || true; } | awk '{print $2}')
+    if [ "$dir" ]; then find "$dir" -name '*.sol*' | sort | xargs cat; fi
+  `, { encoding: "utf-8", stdio: [null, "pipe", "inherit"] })
+}
+
+function getClasses() {
+  var json = getClassesJSON()
+  return Object.keys(json).map(name => ({
+    name, bytecode: json[name].bytecode,
+    members: JSON.parse(json[name].interface),
+  }))
+}
+
+function getClassesJSON() {
+  try {
+    return JSON.parse(require("fs").readFileSync(`${
+      require("child_process").execSync(`
+        { grep build_dir: [Dd]appfile || echo - build; } | awk '{print $2}'
+      `, { encoding: "utf-8" }).trim()
+    }/classes.json`))
+  } catch (error) {
+    console.error(`${process.argv[1].replace(/.*\//, "")}: ${error.message}`)
+    process.exit(1)
+  }
+}

@@ -1,0 +1,29 @@
+DAPPLE-QUICKTEST(1)         Dapple Subcommands         DAPPLE-QUICKTEST(1)
+
+
+NAME
+	dapple-quicktest - blazingly fast Ethereum test runner
+SYNOPSIS
+        dapple-quicktest [-r <filter>] [--skip-build] [-v|--verbose]
+
+DESCRIPTION
+	Quicktest is an EVM test runner written in JavaScript that rips
+	through Dapple tests using a Parity-based tool called ethrun(1).
+
+	While it's intended to be a drop-in replacement for `dapple test',
+	it currently only supports a subset of the old functionality.
+
+        On the other hand, some new features are now supported instead.
+
+INSTALLATION
+        Use `make link' to install from source:
+
+	   git clone https://github.com/nexusdev/dapple-quicktest
+	   make link -C dapple-quicktest
+
+SEE ALSO
+        dapple(1), ethrun(1) <https://github.com/nexusdev/ethrun>
+
+
+
+DAPPLE-QUICKTEST(1)           December 2016            DAPPLE-QUICKTEST(1)
