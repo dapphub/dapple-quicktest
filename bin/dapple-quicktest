@@ -188,7 +188,7 @@ function formatValue(type, value) {
   } else if (/^u?int\d+$/.test(type)) {
     value = new BigNumber(value.toString())
     if (value.gt(1e15) && value.lt(1e30)) {
-      return `${value.dividedBy(new BigNumber("1e18")).toFixed(18)} ETH`
+      return value.dividedBy(new BigNumber("1e18")).toFixed(18)
     } else {
       return value.toString()
     }
@@ -218,7 +218,7 @@ function formatTrace(trace) {
     return `${indent} ${formatAddress(trace.action.from)} -> ${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error || JSON.stringify(trace.result)}`
   } else if (trace.action.type == "create") {
     var classname = `<${keccak(new Buffer(trace.action.init, "hex")).toString("hex").slice(0, 6)}>`
-    if (trace.result) {
+    if (trace.result.code) {
       var codehash = keccak(new Buffer(trace.result.code, "hex")).toString("hex")
       classname = codehash in classes
         ? classes[codehash].name
