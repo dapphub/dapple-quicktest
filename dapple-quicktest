@@ -20,18 +20,24 @@ var BigNumber = require("bignumber.js")
 var PROGRAM_NAME = process.argv[1].replace(/.*\//, "")
 var ethabi = require("ethereumjs-abi")
 
+var methods = {}
+var addressNames = {}
+
 process.on("unhandledException", () => process.exit(1))
 
 var args = process.argv.slice(2)
 
 var skipBuild = false
 var verbose = 0
+var trace = false
 
 for (var i = 0; i < args.length; i++) {
   if (args[i] == "--skip-build") {
     skipBuild = true
   } else if (/^(-v|--(verbose|report))$/.test(args[i])) {
     verbose++
+  } else if (/^--trace$/.test(args[i])) {
+    trace = true
   }
 }
 
@@ -60,6 +66,10 @@ function formatEventDeclaration({ name, inputs, indexed }) {
   return `event ${name}(${inputs.map(({ type, indexed, name }) => {
     return `${type}${indexed ? " indexed" : ""} ${name}`
   }).join(", ")});`
+}
+
+function formatMethod({ name, inputs=[] }) {
+  return `${name}(${inputs.map(({ type }) => type).join(",")})`
 }
 
 function scan(string, pattern) {
@@ -128,6 +138,9 @@ function printDetails() {
 function printFailure(failedTest) {
   console.log()
 
+  addressNames[failedTest.results[0].trace[0].action.from] = "Dapple"
+  addressNames[failedTest.results[0].trace[0].result.address] = failedTest.class.name
+
   var name = failures.every(x => x.class.name == failedTest.class.name)
     ? failedTest.name : `${failedTest.class.name}.${failedTest.name}`
 
@@ -135,10 +148,49 @@ function printFailure(failedTest) {
     `\x1b[31;1m${failedTest.failed ? "FAIL"
       : failedTest.inverted ? "NOFAIL" : "CRASH"
     }\x1b[0m \x1b[4m${name}\x1b[0m`,
-    ([].concat(...failedTest.results.slice(0, 3).map(result => {
-      return result.logs.map(formatLog).filter(x => x)
+    ([].concat(...[failedTest.results[2]].map(result => {
+      return [
+        ...result.logs.map(formatLog).filter(x => x),
+        ...(trace ? result.trace.map(formatTrace).filter(x => x) : []),
+      ]
     })).join("\n") || "(no details)").replace(/^/gm, "  "),
   ].join("\n").replace(/^/gm, "  "))
+}
+
+function formatAddress(address) {
+  return addressNames[address] || address
+}
+
+function formatMethodID(id) {
+  return id in methods ? formatMethod(methods[id]) : id
+}
+
+function formatMethodCall(data) {
+  var [id, args] = [data.slice(0, 8), data.slice(8)]
+  return id in methods
+    ? `${methods[id].name}(${ethabi.rawDecode(
+      (methods[id].inputs || []).map(x => x.type),
+      new Buffer(args, "hex")
+    ).map((x, i) => {
+      if (methods[id].inputs[i].type == "bytes4" && x.toString("hex") in methods) {
+        return `bytes4(keccak(${JSON.stringify(
+          `${methods[id].name}(${(methods[id].inputs || []).map(
+            x => getCanonicalTypeName(x.type)
+          ).join(",")})`
+        )}))`
+      } else {
+        return JSON.stringify(x instanceof Buffer ? x.toString("hex") : x)
+      }
+    }).join(", ")})`
+    : `${id}(${args})`
+}
+
+function formatTrace(trace) {
+  if (trace.action.type == "call") {
+    return `[${["root", ...trace.trace_address].join(":")}] ${formatAddress(trace.action.from)} -> ${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${JSON.stringify(trace.result)}`
+  } else if (trace.action.type == "create") {
+    return `create`
+  }
 }
 
 function formatLog(log) {
@@ -258,8 +310,12 @@ function orderMembers(a, b) {
   return localSourceCode.indexOf(a.name) - localSourceCode.indexOf(b.name)
 }
 
-function methodID({ name, inputs=[] }) {
-  return ethabi.methodID(name, inputs.map(x => x.type)).toString("hex")
+function methodID(method) {
+  var result = ethabi.methodID(
+    method.name, (method.inputs || []).map(x => x.type)
+  ).toString("hex")
+  methods[result] = method
+  return result
 }
 
 function eventID({ name, inputs }) {
@@ -283,7 +339,12 @@ function getClasses() {
   var json = getClassesJSON()
   return Object.keys(json).map(name => ({
     name, bytecode: json[name].bytecode,
-    members: JSON.parse(json[name].interface),
+    members: JSON.parse(json[name].interface).map(member => {
+      if (member.type == "function") {
+        member.methodID = methodID(member)
+      }
+      return member
+    }),
   }))
 }
 
@@ -298,4 +359,25 @@ function getClassesJSON() {
     console.error(`${PROGRAM_NAME}: ${error.message}`)
     process.exit(1)
   }
+}
+
+function getCanonicalTypeName(name) {
+  if (name.startsWith("int[")) {
+    return "int256" + name.slice(3)
+  } else if (name === "int") {
+    return "int256"
+  } else if (name.startsWith("uint[")) {
+    return "uint256" + name.slice(4)
+  } else if (name === "uint") {
+    return "uint256"
+  } else if (name.startsWith("fixed[")) {
+    return "fixed128x128" + name.slice(5)
+  } else if (name === "fixed") {
+    return "fixed128x128"
+  } else if (name.startsWith("ufixed[")) {
+    return "ufixed128x128" + name.slice(6)
+  } else if (name === "ufixed") {
+    return "ufixed128x128"
+  }
+  return name
 }
