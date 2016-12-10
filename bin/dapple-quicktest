@@ -19,9 +19,11 @@
 var BigNumber = require("bignumber.js")
 var PROGRAM_NAME = process.argv[1].replace(/.*\//, "")
 var ethabi = require("ethereumjs-abi")
+var keccak = require("ethereumjs-util").sha3
 
-var methods = {}
-var addressNames = {}
+var classes = {}, methods = {}, addressNames = {}
+
+getAllClassesJSON().forEach(getClasses)
 
 process.on("unhandledException", () => process.exit(1))
 
@@ -29,15 +31,12 @@ var args = process.argv.slice(2)
 
 var skipBuild = false
 var verbose = 0
-var trace = false
 
 for (var i = 0; i < args.length; i++) {
   if (args[i] == "--skip-build") {
     skipBuild = true
   } else if (/^(-v|--(verbose|report))$/.test(args[i])) {
     verbose++
-  } else if (/^--trace$/.test(args[i])) {
-    trace = true
   }
 }
 
@@ -53,7 +52,7 @@ if (!skipBuild) {
 }
 
 var t0 = new Date
-console.log(`Exercising ${getTestClasses().map(x => x.name).join(", ")}...`)
+console.log(`Trying ${getTestClasses().map(x => x.name).join(", ")}...`)
 
 var globalSourceCode = getGlobalSourceCode()
 var localSourceCode = getLocalSourceCode()
@@ -144,52 +143,90 @@ function printFailure(failedTest) {
   var name = failures.every(x => x.class.name == failedTest.class.name)
     ? failedTest.name : `${failedTest.class.name}.${failedTest.name}`
 
+  // for side-effects
+  failedTest.results.forEach(x => x.trace.forEach(formatTrace))
+
+  var crash = !failedTest.failed && !failedTest.inverted
+
   console.log([
-    `\x1b[31;1m${failedTest.failed ? "FAIL"
-      : failedTest.inverted ? "NOFAIL" : "CRASH"
+    `\x1b[31;1m${
+      crash ? "CRASH" : failedTest.failed ? "FAIL" : "NOFAIL"
     }\x1b[0m \x1b[4m${name}\x1b[0m`,
     ([].concat(...[failedTest.results[2]].map(result => {
+      var lastAddress = result.trace[result.trace.length - 1].trace_address
       return [
         ...result.logs.map(formatLog).filter(x => x),
-        ...(trace ? result.trace.map(formatTrace).filter(x => x) : []),
+        ...(crash ? result.trace.filter(
+          trace => trace.trace_address.length <= lastAddress.length && (
+            trace.trace_address.every((x, i) => x <= lastAddress[i])
+          )
+        ).map(formatTrace).filter(x => x) : []),
       ]
     })).join("\n") || "(no details)").replace(/^/gm, "  "),
   ].join("\n").replace(/^/gm, "  "))
 }
 
 function formatAddress(address) {
-  return addressNames[address] || address
+  return addressNames[address] || `<${address.slice(0, 4)}>`
 }
 
 function formatMethodID(id) {
   return id in methods ? formatMethod(methods[id]) : id
 }
 
+function formatValue(type, value) {
+  if (type == "bytes4" && value.toString("hex") in methods) {
+    var method = methods[value.toString("hex")]
+    var inputs = method.inputs || []
+    return `bytes4(keccak(${JSON.stringify(`${method.name}(${
+      inputs.map(({ type }) => getCanonicalTypeName(type)).join(",")
+    })`)}))`
+  } else if (type == "address") {
+    return formatAddress(value.toString("hex"))
+  } else if (value instanceof Buffer) {
+    return `0x${value.toString("hex")}`
+  } else if (/^u?int\d+$/.test(type)) {
+    value = new BigNumber(value.toString())
+    if (value.gt(1e15) && value.lt(1e30)) {
+      return `${value.dividedBy(new BigNumber("1e18")).toFixed(18)} ETH`
+    } else {
+      return value.toString()
+    }
+  } else {
+    return JSON.stringify(value)
+  }
+}
+
 function formatMethodCall(data) {
-  var [id, args] = [data.slice(0, 8), data.slice(8)]
-  return id in methods
-    ? `${methods[id].name}(${ethabi.rawDecode(
-      (methods[id].inputs || []).map(x => x.type),
-      new Buffer(args, "hex")
-    ).map((x, i) => {
-      if (methods[id].inputs[i].type == "bytes4" && x.toString("hex") in methods) {
-        return `bytes4(keccak(${JSON.stringify(
-          `${methods[id].name}(${(methods[id].inputs || []).map(
-            x => getCanonicalTypeName(x.type)
-          ).join(",")})`
-        )}))`
-      } else {
-        return JSON.stringify(x instanceof Buffer ? x.toString("hex") : x)
-      }
-    }).join(", ")})`
-    : `${id}(${args})`
+  var [id, data] = [data.slice(0, 8), data.slice(8)]
+  var method = methods[id]
+  return method ? `${method.name}(${ethabi.rawDecode(
+    (method.inputs || []).map(x => x.type), new Buffer(data, "hex")
+  ).map((x, i) => formatValue(method.inputs[i].type, x)).join(", ")})`
+  : `<${id}>(0x${data})`
+}
+
+function formatMethodOutput(id, data) {
+  return !(id in methods) ? `0x${data}` : `(${ethabi.rawDecode(
+    (methods[id].outputs || []).map(x => x.type), new Buffer(data, "hex")
+  ).map((x, i) => formatValue(methods[id].outputs[i].type, x)).join(", ")})`
 }
 
 function formatTrace(trace) {
+  var indent = trace.trace_address.map(x => "  ").join("")
   if (trace.action.type == "call") {
-    return `[${["root", ...trace.trace_address].join(":")}] ${formatAddress(trace.action.from)} -> ${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${JSON.stringify(trace.result)}`
+    return `${indent} ${formatAddress(trace.action.from)} -> ${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error || JSON.stringify(trace.result)}`
   } else if (trace.action.type == "create") {
-    return `create`
+    var classname = `<${keccak(new Buffer(trace.action.init, "hex")).toString("hex").slice(0, 6)}>`
+    if (trace.result) {
+      var codehash = keccak(new Buffer(trace.result.code, "hex")).toString("hex")
+      classname = codehash in classes
+        ? classes[codehash].name
+        : `<${codehash.slice(0, 6)}>`
+      addressNames[trace.result.address] = `<${classname}#${trace.result.address.slice(0, 4)}>`
+    }
+
+    return `${indent} ${formatAddress(trace.action.from)} -> new ${classname}() -> ${formatAddress(trace.result.address) || trace.result.error || JSON.stringify(trace.result)}`
   }
 }
 
@@ -275,7 +312,7 @@ function getTests() {
 }
 
 function getTestClasses() {
-  return getClasses().filter(isTestClass).filter(
+  return getClasses(getClassesJSON()).filter(isTestClass).filter(
     x => x.members.some(isTestMethod)
   )
 }
@@ -335,17 +372,22 @@ function getLocalSourceCode() {
   `, { encoding: "utf-8", stdio: [null, "pipe", "inherit"] })
 }
 
-function getClasses() {
-  var json = getClassesJSON()
-  return Object.keys(json).map(name => ({
-    name, bytecode: json[name].bytecode,
-    members: JSON.parse(json[name].interface).map(member => {
-      if (member.type == "function") {
-        member.methodID = methodID(member)
-      }
-      return member
-    }),
-  }))
+function getClasses(json) {
+  return Object.keys(json).map(name => {
+    var bytecode = json[name].bytecode
+    var runtimeBytecode = json[name].runtimeBytecode
+    var result = {
+      name, bytecode, runtimeBytecode,
+      members: JSON.parse(json[name].interface).map(member => {
+        if (member.type == "function") {
+          member.methodID = methodID(member)
+        }
+        return member
+      }),
+    }
+    classes[keccak(new Buffer(runtimeBytecode, "hex")).toString("hex")] = result
+    return result
+  })
 }
 
 function getClassesJSON() {
@@ -355,6 +397,19 @@ function getClassesJSON() {
         { grep build_dir: [Dd]appfile || echo - build; } | awk '{print $2}'
       `, { encoding: "utf-8" }).trim()
     }/classes.json`))
+  } catch (error) {
+    console.error(`${PROGRAM_NAME}: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+function getAllClassesJSON() {
+  try {
+    return require("child_process").execSync(
+      "find . -name classes.json", { encoding: "utf-8" }
+    ).trim().split("\n").filter(x => x).map(filename => {
+      return JSON.parse(require("fs").readFileSync(filename))
+    })
   } catch (error) {
     console.error(`${PROGRAM_NAME}: ${error.message}`)
     process.exit(1)
