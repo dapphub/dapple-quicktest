@@ -1,7 +1,7 @@
 {
   "name": "dapple-quicktest",
   "version": "0.0.0",
-  "bin": "dapple-quicktest",
+  "bin": "bin/dapple-quicktest",
   "dependencies": {
     "bignumber.js": "^3.0.1",
     "ethereumjs-abi": "^0.6.4"

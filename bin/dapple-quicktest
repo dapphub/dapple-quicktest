@@ -324,7 +324,7 @@ function eventID({ name, inputs }) {
 
 function getGlobalSourceCode() {
   return require("fs").readFileSync(
-    `${__dirname}/event-list.sol`, { encoding: "utf-8" }
+    `${__dirname}/../event-list.sol`, { encoding: "utf-8" }
   )
 }
 
