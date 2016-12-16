@@ -2,7 +2,7 @@ DAPPLE-QUICKTEST(1)         Dapple Subcommands         DAPPLE-QUICKTEST(1)
 
 
 NAME
-	dapple-quicktest - blazingly fast Ethereum test runner
+	dapple-quicktest - run Dapple tests quickly using Parity
 SYNOPSIS
         dapple-quicktest [-r <filter>] [--skip-build] [-v|--verbose]
 

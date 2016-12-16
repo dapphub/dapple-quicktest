@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/// dapple-quicktest -- blazingly fast Ethereum test runner
+/// dapple-quicktest -- run Dapple tests quickly using Parity
 
 // Copyright 2016  Nexus Development, LLC
 
@@ -16,26 +16,34 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see http://www.gnu.org/licenses.
 
-var BigNumber = require("bignumber.js")
 var PROGRAM_NAME = process.argv[1].replace(/.*\//, "")
+var PROGRAM_ARGS = process.argv.slice(2)
+
+var BigNumber = require("bignumber.js")
 var ethabi = require("ethereumjs-abi")
-var keccak = require("ethereumjs-util").sha3
 
-var classes = {}, methods = {}, addressNames = {}
+function keccak(hexdata) {
+  return require("ethereumjs-util").sha3(
+    new Buffer(hexdata, "hex")
+  ).toString("hex")
+}
 
+var classes = {}
+var methods = {}
+var addressNames = {}
+
+// XXX side effects
 getAllClassesJSON().forEach(getClasses)
 
 process.on("unhandledException", () => process.exit(1))
 
-var args = process.argv.slice(2)
-
 var skipBuild = false
 var verbose = 0
 
-for (var i = 0; i < args.length; i++) {
-  if (args[i] == "--skip-build") {
+for (var i = 0; i < PROGRAM_ARGS.length; i++) {
+  if (PROGRAM_ARGS[i] == "--skip-build") {
     skipBuild = true
-  } else if (/^(-v|--(verbose|report))$/.test(args[i])) {
+  } else if (/^(-v|--(verbose|report))$/.test(PROGRAM_ARGS[i])) {
     verbose++
   }
 }
@@ -118,7 +126,12 @@ function handleTestOutput(test, output) {
   test.passed = test.inverted ? !test.passed : test.passed
 
   if (tests.every(test => test.finished && (printProgress(test), true))) {
-    console.log(), printDetails(), printSummary()
+    printDetails()
+    printSummary()
+
+    if (tests.some(x => !x.passed)) {
+      process.exit(1)
+    }
   }
 }
 
@@ -130,6 +143,8 @@ function printProgress(test) {
 }
 
 function printDetails() {
+  console.log()
+
   failures = tests.filter(test => !test.passed)
   failures.forEach(printFailure)
 }
@@ -143,7 +158,7 @@ function printFailure(failedTest) {
   var name = failures.every(x => x.class.name == failedTest.class.name)
     ? failedTest.name : `${failedTest.class.name}.${failedTest.name}`
 
-  // for side-effects
+  // XXX side effects
   failedTest.results.forEach(x => x.trace.forEach(formatTrace))
 
   var crash = !failedTest.failed && !failedTest.inverted
@@ -152,13 +167,13 @@ function printFailure(failedTest) {
     `\x1b[31;1m${
       crash ? "CRASH" : failedTest.failed ? "FAIL" : "NOFAIL"
     }\x1b[0m \x1b[4m${name}\x1b[0m`,
-    ([].concat(...[failedTest.results[2]].map(result => {
+    ([].concat(...failedTest.results.map(result => {
       var lastAddress = result.trace[result.trace.length - 1].trace_address
       return [
         ...result.logs.map(formatLog).filter(x => x),
-        ...(crash ? result.trace.filter(
+        ...(crash && !result.success ? result.trace.filter(
           trace => trace.trace_address.length <= lastAddress.length && (
-            trace.trace_address.every((x, i) => x <= lastAddress[i])
+            true //trace.trace_address.every((x, i) => x <= lastAddress[i])
           )
         ).map(formatTrace).filter(x => x) : []),
       ]
@@ -189,8 +204,10 @@ function formatValue(type, value) {
     value = new BigNumber(value.toString())
     if (value.gt(1e15) && value.lt(1e30)) {
       return value.dividedBy(new BigNumber("1e18")).toFixed(18)
+    } else if (value.lt(1e16)) {
+      return value.toFixed(0)
     } else {
-      return value.toString()
+      return `0x${value.toString(16)}`
     }
   } else {
     return JSON.stringify(value)
@@ -215,18 +232,18 @@ function formatMethodOutput(id, data) {
 function formatTrace(trace) {
   var indent = trace.trace_address.map(x => "  ").join("")
   if (trace.action.type == "call") {
-    return `${indent} ${formatAddress(trace.action.from)} -> ${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error || JSON.stringify(trace.result)}`
+    return `${formatAddress(trace.action.from)} │ ${indent}${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error || JSON.stringify(trace.result)}`
   } else if (trace.action.type == "create") {
-    var classname = `<${keccak(new Buffer(trace.action.init, "hex")).toString("hex").slice(0, 6)}>`
+    var classname = `<${keccak(trace.action.init).slice(0, 6)}>`
     if (trace.result.code) {
-      var codehash = keccak(new Buffer(trace.result.code, "hex")).toString("hex")
+      var codehash = keccak(trace.result.code)
       classname = codehash in classes
         ? classes[codehash].name
         : `<${codehash.slice(0, 6)}>`
       addressNames[trace.result.address] = `<${classname}#${trace.result.address.slice(0, 4)}>`
     }
 
-    return `${indent} ${formatAddress(trace.action.from)} -> new ${classname}() -> ${formatAddress(trace.result.address) || trace.result.error || JSON.stringify(trace.result)}`
+    return `${formatAddress(trace.action.from)} │ ${indent}new ${classname}(...) => ${formatAddress(trace.result.address) || trace.result.error || JSON.stringify(trace.result)}`
   }
 }
 
@@ -385,7 +402,7 @@ function getClasses(json) {
         return member
       }),
     }
-    classes[keccak(new Buffer(runtimeBytecode, "hex")).toString("hex")] = result
+    classes[keccak(runtimeBytecode)] = result
     return result
   })
 }
