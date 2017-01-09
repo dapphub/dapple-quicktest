@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "bin": "bin/dapple-quicktest",
   "dependencies": {
-    "bignumber.js": "^3.0.1",
+    "bignumber.js": "^4.0.0",
     "ethereumjs-abi": "^0.6.4"
   }
 }
