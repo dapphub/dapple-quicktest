@@ -37,14 +37,22 @@ getAllClassesJSON().forEach(getClasses)
 
 process.on("unhandledException", () => process.exit(1))
 
+var inputFiles = []
 var skipBuild = false
 var verbose = 0
 
 for (var i = 0; i < PROGRAM_ARGS.length; i++) {
-  if (PROGRAM_ARGS[i] == "--skip-build") {
+  var arg = PROGRAM_ARGS[i]
+  if (arg == "--skip-build") {
     skipBuild = true
-  } else if (/^(-v|--(verbose|report))$/.test(PROGRAM_ARGS[i])) {
+  } else if (/^(-v|--(verbose|report))$/.test(arg)) {
     verbose++
+  } else if (/^-/.test(arg)) {
+    console.error(`${PROGRAM_NAME}: unknown option: ${arg}`)
+    process.exit(1)
+  } else {
+    inputFiles.push(arg)
+    skipBuild = true
   }
 }
 
@@ -269,6 +277,8 @@ function formatLog(log) {
       )
     } else if (/^log_named_bytes32$/.test(event.name)) {
       return `${args[0]}: ${formatBytes(args[1])}`
+    } else if (/^log_named_u?int$/.test(event.name)) {
+      return `${args[0]}: ${new BigNumber(String(args[1]))}`
     } else if (/^log_named_decimal_u?int$/.test(event.name)) {
       var number = new BigNumber(String(args[1]))
       var decimals = Number(args[2])
@@ -397,36 +407,52 @@ function getGlobalSourceCode() {
 
 function getLocalSourceCode() {
   return require("child_process").execSync(`
-    dir=$({ grep sol_sources: [Dd]appfile || true; } | awk '{print $2}')
-    if [ "$dir" ]; then find "$dir" -name '*.sol*' | sort | xargs cat; fi
+    dir=$({ grep 2>/dev/null sol_sources: [Dd]appfile; } | awk '{print $2}')
+    find "\${dir:-.}" -name '*.sol*' | sort | xargs cat
   `, { encoding: "utf-8", stdio: [null, "pipe", "inherit"] })
 }
 
+function getClass({ name, bytecode, runtimeBytecode, abi }) {
+  var result = {
+    name, bytecode, runtimeBytecode,
+    members: abi.map(member => {
+      if (member.type == "function") {
+        member.methodID = methodID(member)
+      }
+      return member
+    }),
+  }
+  classes[keccak(runtimeBytecode)] = result
+  return result
+}
+
 function getClasses(json) {
-  return Object.keys(json).map(name => {
-    var bytecode = json[name].bytecode
-    var runtimeBytecode = json[name].runtimeBytecode
-    var result = {
-      name, bytecode, runtimeBytecode,
-      members: JSON.parse(json[name].interface).map(member => {
-        if (member.type == "function") {
-          member.methodID = methodID(member)
-        }
-        return member
-      }),
-    }
-    classes[keccak(runtimeBytecode)] = result
-    return result
-  })
+  if (json.contracts) {
+    return Object.keys(json.contracts).map(name => {
+      var bytecode = json.contracts[name]["bin"]
+      var runtimeBytecode = json.contracts[name]["bin-runtime"]
+      var abi = JSON.parse(json.contracts[name]["abi"])
+      return getClass({ name, bytecode, runtimeBytecode, abi })
+    })
+  } else {
+    return Object.keys(json).map(name => {
+      var bytecode = json[name].bytecode
+      var runtimeBytecode = json[name].runtimeBytecode
+      var abi = JSON.parse(json[name].interface)
+      return getClass({ name, bytecode, runtimeBytecode, abi })
+    })
+  }
 }
 
 function getClassesJSON() {
   try {
-    return JSON.parse(require("fs").readFileSync(`${
-      require("child_process").execSync(`
-        { grep build_dir: [Dd]appfile || echo - build; } | awk '{print $2}'
-      `, { encoding: "utf-8" }).trim()
-    }/classes.json`))
+    return JSON.parse(require("fs").readFileSync(
+      inputFiles.length ? inputFiles[0] : `${
+        require("child_process").execSync(`{
+          grep build_dir: [Dd]appfile || echo - build
+        } | awk '{print $2}' `, { encoding: "utf-8" }).trim()
+      }/classes.json`
+    ))
   } catch (error) {
     console.error(`${PROGRAM_NAME}: ${error.message}`)
     process.exit(1)
