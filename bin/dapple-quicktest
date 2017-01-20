@@ -67,6 +67,11 @@ if (!skipBuild) {
   }
 }
 
+if (!getTestClasses().length) {
+  console.log(`${PROGRAM_NAME}: no tests found`)
+  process.exit(0)
+}
+
 var t0 = new Date
 console.log(`Trying ${getTestClasses().map(x => x.name).join(", ")}...`)
 
@@ -120,7 +125,10 @@ function runTest(test) {
   var output = []
   child.stdout.on("data", x => output.push(x))
   child.stdout.on("end", () => handleTestOutput(test, Buffer.concat(output)))
-  child.stdin.end(test.class.bytecode)
+  child.stdin.end([
+    ...inputFiles.slice(0, inputFiles.length - 1),
+    test.class.bytecode,
+  ].map(x => `${x}\n`).join(""))
 }
 
 function handleTestOutput(test, output) {
@@ -254,7 +262,7 @@ function formatTrace(trace) {
       addressNames[trace.result.address] = `<${classname}#${trace.result.address.slice(0, 4)}>`
     }
 
-    return { sender: formatAddress(trace.action.from), message: `${indent}new ${classname}(...) => ${formatAddress(trace.result.address) || trace.result.error || JSON.stringify(trace.result)}` }
+    return { sender: formatAddress(trace.action.from), message: `${indent}new ${classname}(...) => ${trace.result.error || formatAddress(trace.result.address) || JSON.stringify(trace.result)}` }
   }
 }
 
@@ -447,7 +455,7 @@ function getClasses(json) {
 function getClassesJSON() {
   try {
     return JSON.parse(require("fs").readFileSync(
-      inputFiles.length ? inputFiles[0] : `${
+      inputFiles.length ? inputFiles[inputFiles.length - 1] : `${
         require("child_process").execSync(`{
           grep build_dir: [Dd]appfile || echo - build
         } | awk '{print $2}' `, { encoding: "utf-8" }).trim()

@@ -4,7 +4,8 @@ DAPPLE-QUICKTEST(1)         Dapple Subcommands         DAPPLE-QUICKTEST(1)
 NAME
 	dapple-quicktest - run Dapple tests quickly using Parity
 SYNOPSIS
-        dapple-quicktest [-r <filter>] [--skip-build] [-v|--verbose]
+        dapple-quicktest [--skip-build] [-v|--verbose]
+        dapple-quicktest [<bytecode-file>...] <test-json-file>
 
 DESCRIPTION
 	Quicktest is an EVM test runner written in JavaScript that rips
