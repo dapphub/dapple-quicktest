@@ -443,7 +443,7 @@ function getClasses(json) {
       var bytecode = json.contracts[name]["bin"]
       var runtimeBytecode = json.contracts[name]["bin-runtime"]
       
-      if (!abi || !bytecode) {
+      if (abi == null || bytecode == null) {
         console.error(`${PROGRAM_NAME}: please add --combined-json=abi,bin`)
         process.exit(1)
       }
