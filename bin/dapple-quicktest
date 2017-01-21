@@ -437,9 +437,17 @@ function getClass({ name, bytecode, runtimeBytecode, abi }) {
 function getClasses(json) {
   if (json.contracts) {
     return Object.keys(json.contracts).map(name => {
+      var abi = json.contracts[name]["abi"]
       var bytecode = json.contracts[name]["bin"]
       var runtimeBytecode = json.contracts[name]["bin-runtime"]
-      var abi = JSON.parse(json.contracts[name]["abi"])
+      
+      if (!abi || !bytecode) {
+        console.error(`${PROGRAM_NAME}: please add --combined-json=abi,bin`)
+        process.exit(1)
+      }
+
+      abi = JSON.parse(abi)
+      
       return getClass({ name, bytecode, runtimeBytecode, abi })
     })
   } else {
