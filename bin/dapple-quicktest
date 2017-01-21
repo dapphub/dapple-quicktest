@@ -67,6 +67,8 @@ if (!skipBuild) {
   }
 }
 
+var classesJSON = getClassesJSON()
+
 if (!getTestClasses().length) {
   console.log(`${PROGRAM_NAME}: no tests found`)
   process.exit(0)
@@ -360,7 +362,7 @@ function getTests() {
 }
 
 function getTestClasses() {
-  return getClasses(getClassesJSON()).filter(isTestClass).filter(
+  return getClasses(classesJSON).filter(isTestClass).filter(
     x => x.members.some(isTestMethod)
   )
 }
@@ -461,7 +463,7 @@ function getClasses(json) {
 }
 
 function getClassesJSON() {
-  try {
+  try {    
     return JSON.parse(require("fs").readFileSync(
       inputFiles.length ? inputFiles[inputFiles.length - 1] : `${
         require("child_process").execSync(`{
