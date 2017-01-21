@@ -251,7 +251,7 @@ function formatMethodOutput(id, data) {
 function formatTrace(trace) {
   var indent = trace.trace_address.map(x => "  ").join("")
   if (trace.action.type == "call") {
-    return { sender: formatAddress(trace.action.from), message: `${indent}${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error || JSON.stringify(trace.result)}` }
+    return { sender: formatAddress(trace.action.from), message: `${indent}${formatAddress(trace.action.to)}${trace.action.input.length % 64 == 8 ? `.${formatMethodCall(trace.action.input)}` : `(${trace.action.input})`} => ${"output" in trace.result ? formatMethodOutput(trace.action.input.slice(0, 8), trace.result.output) : trace.result.error ? `\x1b[31;1m${trace.result.error}\x1b[0m` : JSON.stringify(trace.result)}` }
   } else if (trace.action.type == "create") {
     var classname = `<${keccak(trace.action.init).slice(0, 6)}>`
     if (trace.result.code) {
