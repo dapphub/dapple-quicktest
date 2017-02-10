@@ -22,6 +22,8 @@ var PROGRAM_ARGS = process.argv.slice(2)
 var BigNumber = require("bignumber.js")
 var ethabi = require("ethereumjs-abi")
 
+BigNumber.config({ DECIMAL_PLACES: 36 })
+
 function keccak(hexdata) {
   return require("ethereumjs-util").sha3(
     new Buffer(hexdata, "hex")
@@ -135,7 +137,7 @@ function runTest(test) {
 
 function handleTestOutput(test, output) {
   test.finished = true
-  test.results = JSON.parse(String(output))
+  test.results = JSON.parse(output)
 
   test.failed = !!Number(test.results[3].output)
   test.passed = test.results.every(x => x.success) && !test.failed
@@ -223,10 +225,12 @@ function formatValue(type, value) {
     return `0x${value.toString("hex")}`
   } else if (/^u?int\d+$/.test(type)) {
     value = new BigNumber(value.toString())
-    if (value.gt(1e15) && value.lt(1e30)) {
-      return value.dividedBy(new BigNumber("1e18")).toFixed(18)
-    } else if (value.lt(1e16)) {
+    if (value.lt(1e12)) {
       return value.toFixed(0)
+    } else if (value.gt(1e14) && value.lt(1e25)) {
+      return `${value.dividedBy(new BigNumber("1e18"))} ether`
+    } else if (value.gt(1e26) && value.lt(3.4e38)) {
+      return value
     } else {
       return `0x${value.toString(16)}`
     }
@@ -442,14 +446,14 @@ function getClasses(json) {
       var abi = json.contracts[name]["abi"]
       var bytecode = json.contracts[name]["bin"]
       var runtimeBytecode = json.contracts[name]["bin-runtime"]
-      
+
       if (abi == null || bytecode == null) {
         console.error(`${PROGRAM_NAME}: please add --combined-json=abi,bin`)
         process.exit(1)
       }
 
       abi = JSON.parse(abi)
-      
+
       return getClass({ name, bytecode, runtimeBytecode, abi })
     })
   } else {
@@ -463,7 +467,7 @@ function getClasses(json) {
 }
 
 function getClassesJSON() {
-  try {    
+  try {
     return JSON.parse(require("fs").readFileSync(
       inputFiles.length ? inputFiles[inputFiles.length - 1] : `${
         require("child_process").execSync(`{
