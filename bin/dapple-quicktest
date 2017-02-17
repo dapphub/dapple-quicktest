@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /// dapple-quicktest -- run Dapple tests quickly using Parity
 
-// Copyright 2016  Nexus Development, LLC
+// Copyright (C) 2016, 2017  Nexus Development, LLC
 
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License as
@@ -35,7 +35,7 @@ var methods = {}
 var addressNames = {}
 
 // XXX side effects
-getAllClassesJSON().forEach(getClasses)
+// getAllClassesJSON().forEach(getClasses)
 
 process.on("unhandledException", () => process.exit(1))
 
@@ -69,7 +69,37 @@ if (!skipBuild) {
   }
 }
 
-var classesJSON = getClassesJSON()
+var classesJSON
+
+if (inputFiles.length == 1 && (
+  require("fs").lstatSync(inputFiles[0]).isDirectory()
+)) {
+  classesJSON = {
+    contracts: Object.assign({
+    }, ...require("fs").readdirSync(inputFiles[0]).filter(x => {
+      return /\.abi$/.test(x)
+    }).map(x => {
+      var filename = `${inputFiles[0]}/${x}`
+      return {
+        [x.replace(/\.abi$/, "")]: {
+          abi: require("fs").readFileSync(
+            filename, { encoding: "utf-8" }
+          ),
+          bin: require("fs").readFileSync(
+            `${filename.replace(/abi$/, "bin")}`, { encoding: "utf-8" }
+          ),
+          "bin-runtime": require("fs").readFileSync(
+            `${filename.replace(/abi$/, "bin-runtime")}`, {
+              encoding: "utf-8"
+            }
+          ),
+        }
+      }
+    }))
+  }
+} else {
+  classesJSON = getClassesJSON()
+}
 
 if (!getTestClasses().length) {
   console.log(`${PROGRAM_NAME}: no tests found`)
@@ -366,7 +396,7 @@ function getTests() {
 }
 
 function getTestClasses() {
-  return getClasses(classesJSON).filter(isTestClass).filter(
+  return getClasses().filter(isTestClass).filter(
     x => x.members.some(isTestMethod)
   )
 }
@@ -440,12 +470,12 @@ function getClass({ name, bytecode, runtimeBytecode, abi }) {
   return result
 }
 
-function getClasses(json) {
-  if (json.contracts) {
-    return Object.keys(json.contracts).map(name => {
-      var abi = json.contracts[name]["abi"]
-      var bytecode = json.contracts[name]["bin"]
-      var runtimeBytecode = json.contracts[name]["bin-runtime"]
+function getClasses() {
+  if (classesJSON.contracts) {
+    return Object.keys(classesJSON.contracts).map(name => {
+      var abi = classesJSON.contracts[name]["abi"]
+      var bytecode = classesJSON.contracts[name]["bin"]
+      var runtimeBytecode = classesJSON.contracts[name]["bin-runtime"]
 
       if (abi == null || bytecode == null) {
         console.error(`${PROGRAM_NAME}: please add --combined-json=abi,bin`)
@@ -457,10 +487,10 @@ function getClasses(json) {
       return getClass({ name, bytecode, runtimeBytecode, abi })
     })
   } else {
-    return Object.keys(json).map(name => {
-      var bytecode = json[name].bytecode
-      var runtimeBytecode = json[name].runtimeBytecode
-      var abi = JSON.parse(json[name].interface)
+    return Object.keys(classesJSON).map(name => {
+      var bytecode = classesJSON[name].bytecode
+      var runtimeBytecode = classesJSON[name].runtimeBytecode
+      var abi = JSON.parse(classesJSON[name].interface)
       return getClass({ name, bytecode, runtimeBytecode, abi })
     })
   }
@@ -472,22 +502,9 @@ function getClassesJSON() {
       inputFiles.length ? inputFiles[inputFiles.length - 1] : `${
         require("child_process").execSync(`{
           grep build_dir: [Dd]appfile || echo - build
-        } | awk '{print $2}' `, { encoding: "utf-8" }).trim()
+        } | awk '{print $2}'`, { encoding: "utf-8" }).trim()
       }/classes.json`
     ))
-  } catch (error) {
-    console.error(`${PROGRAM_NAME}: ${error.message}`)
-    process.exit(1)
-  }
-}
-
-function getAllClassesJSON() {
-  try {
-    return require("child_process").execSync(
-      "find . -name classes.json", { encoding: "utf-8" }
-    ).trim().split("\n").filter(x => x).map(filename => {
-      return JSON.parse(require("fs").readFileSync(filename))
-    })
   } catch (error) {
     console.error(`${PROGRAM_NAME}: ${error.message}`)
     process.exit(1)
